@@ -24,6 +24,7 @@ from axolotl.utils.dict import DictDefault
 from axolotl.utils.freeze import freeze_layers_except
 from axolotl.utils.models import load_model, load_tokenizer
 from axolotl.utils.trainer import setup_trainer
+from axolotl.trainer_pt_utils import LabelSmoother
 
 try:
     from optimum.bettertransformer import BetterTransformer
@@ -113,6 +114,7 @@ def train(
         tokenizer,
         total_num_steps,
     )
+    trainer.label_smoother = LabelSmoother()
 
     # go ahead and presave, so we have the adapter config available to inspect
     if peft_config:
