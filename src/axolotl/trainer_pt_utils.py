@@ -558,7 +558,7 @@ class LabelSmoother:
             The index in the labels to ignore when computing the loss.
     """
 
-    epsilon: float = 0.1
+    epsilon: float = 0
     ignore_index: int = -100
 
     def __call__(self, model_output, labels, shift_labels=False):
@@ -577,28 +577,25 @@ class LabelSmoother:
         labels = torch.clamp(labels, min=0)
         nll_loss = log_probs.gather(dim=-1, index=labels)
         # works for fp16 input tensor too, by internally upcasting it to fp32
-        smoothed_loss = log_probs.sum(dim=-1, keepdim=True, dtype=torch.float32)
+        # smoothed_loss = log_probs.sum(dim=-1, keepdim=True, dtype=torch.float32)
 
         nll_loss.masked_fill_(padding_mask, 0.0)
-        smoothed_loss.masked_fill_(padding_mask, 0.0)
+        # smoothed_loss.masked_fill_(padding_mask, 0.0)
 
         # Take the mean over the label dimensions, then divide by the number of active elements (i.e. not-padded):
-        num_active_elements = padding_mask.numel() - padding_mask.long().sum()
+        num_active_elements = (~padding_mask).sum(dim=1, keepdim=True)
 
         import os
         if "last_token_weight" in os.environ:
             last_token_weight = float(os.environ["last_token_weight"])
-            token_weights = torch.ones(num_active_elements)
-            token_weights *= (1 - last_token_weight) / (num_active_elements.cpu() - 1)
-            token_weights[-1] = last_token_weight
-            token_weights *= num_active_elements.cpu()
-
-            # Pad with zeros
-            token_weights = torch.zeros(nll_loss.shape)
-            token_weights[:num_active_elements] = token_weights
+            reciprocal_values = (1 - last_token_weight) / (num_active_elements - 1)
+            token_weights = torch.zeros_like(padding_mask, dtype=torch.float32)
+            token_weights[~padding_mask] = reciprocal_values.expand_as(token_weights)[~padding_mask]
+            token_weights[:, -2] = last_token_weight
 
             nll_loss = nll_loss * token_weights.to(nll_loss.device)
-            smoothed_loss = smoothed_loss * token_weights.to(smoothed_loss.device)
+            nll_loss = nll_loss.sum()
+            # smoothed_loss = smoothed_loss * padded_token_weights.to(smoothed_loss.device)
 
             global _print_token_weight_thing
             if _print_token_weight_thing:
@@ -607,10 +604,14 @@ class LabelSmoother:
                 print("=" * 20)
                 _print_token_weight_thing = False
 
-        nll_loss = nll_loss.sum() / num_active_elements
-        smoothed_loss = smoothed_loss.sum() / (num_active_elements * log_probs.shape[-1])
+            return nll_loss
+        else:
+            raise ValueError("os.environ['last_token_weight'] not set")
 
-        return (1 - self.epsilon) * nll_loss + self.epsilon * smoothed_loss
+        # nll_loss = nll_loss.sum() / num_active_elements
+        # smoothed_loss = smoothed_loss.sum() / (num_active_elements * log_probs.shape[-1])
+
+        # return (1 - self.epsilon) * nll_loss + self.epsilon * smoothed_loss
 
 def get_length_grouped_indices(lengths, batch_size, mega_batch_mult=None, generator=None):
     """
